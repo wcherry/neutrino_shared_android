@@ -94,7 +94,16 @@ object NeutrinoApps {
         oauthClientId = "neutrino-calendar-android",
     )
 
-    val all: List<NeutrinoAppConfig> = listOf(drive, calendar)
+    /** Seeded by `neutrino/migrations/00143_oauth__*`. The `ndoc` prefix matches the iOS Docs app's. */
+    val docs = NeutrinoAppConfig(
+        slug = "docs",
+        displayName = "Neutrino Docs",
+        contentNoun = "documents",
+        prefix = "ndoc",
+        oauthClientId = "neutrino-docs-android",
+    )
+
+    val all: List<NeutrinoAppConfig> = listOf(drive, calendar, docs)
 }
 
 /** Every failure a request can end in, with text a person can act on. */

@@ -119,7 +119,8 @@ fun LoginScreen(onRegister: () -> Unit) {
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
         GradientButton(if (needsTotp) "Verify and sign in" else "Sign in", busy, enabled = email.isNotBlank() && password.isNotEmpty(), onClick = ::submit)
-        TextButton(onClick = onRegister, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Create an account") }
+        // Registration happens on the server shown here, so an edited address must be saved first.
+        TextButton(onClick = { graph.setServerUrl(server); onRegister() }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Create an account") }
         if (editingServer) {
             OutlinedTextField(
                 server, { server = it }, label = { Text("Server") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
