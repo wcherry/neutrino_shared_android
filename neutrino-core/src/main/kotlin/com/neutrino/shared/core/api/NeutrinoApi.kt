@@ -2,6 +2,7 @@ package com.neutrino.shared.core.api
 
 import com.neutrino.shared.core.keys.ArchivedKeys
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.JsonElement
@@ -15,6 +16,7 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import java.io.IOException
 
 /**
  * The Neutrino HTTP API, as every Android client uses it: the token plumbing, the account's keys,
@@ -38,11 +40,37 @@ open class NeutrinoApi(val http: OkHttpClient, val auth: AuthClient) {
     /** Headers every request carries, beyond the bearer token. Calendar adds its client id. */
     protected open fun decorate(builder: Request.Builder): Request.Builder = builder
 
+    /** How [send] rides out transient failures. Tests that script failures set [RetryPolicy.NONE]. */
+    var retryPolicy: RetryPolicy = RetryPolicy.DEFAULT
+
     /**
-     * Send with a bearer token; on 401 refresh and retry once. `build` runs per attempt so a body
-     * is never replayed half-consumed. The caller owns (and must close) the returned response.
+     * Send with a bearer token; on 401 refresh and retry once. A transient failure — a dropped
+     * connection, 429, 502–504 — is retried under [retryPolicy] (see its rules on which methods).
+     * `build` runs per attempt so a body is never replayed half-consumed. The caller owns (and must
+     * close) the returned response.
      */
     suspend fun send(build: () -> Request.Builder): Response {
+        val idempotent = RetryPolicy.isIdempotent(build().build().method)
+        var attempt = 1
+        while (true) {
+            val isLast = attempt >= retryPolicy.maxAttempts
+            val wait = try {
+                val response = sendAuthorized(build)
+                if (isLast || !RetryPolicy.isRetryable(response.code, idempotent)) return response
+                val retryAfter = RetryPolicy.retryAfterMs(response.header("Retry-After"))
+                response.close()
+                retryPolicy.delayBeforeRetry(attempt, retryAfter)
+            } catch (e: ApiException.Network) {
+                val cause = e.cause as? IOException ?: throw e
+                if (isLast || !RetryPolicy.isTransient(cause, idempotent)) throw e
+                retryPolicy.delayBeforeRetry(attempt)
+            }
+            delay(wait)
+            attempt++
+        }
+    }
+
+    private suspend fun sendAuthorized(build: () -> Request.Builder): Response {
         val first = http.newCall(decorate(build()).header("Authorization", "Bearer ${auth.accessToken()}").build()).await()
         if (first.code != 401) return first
         first.close()
