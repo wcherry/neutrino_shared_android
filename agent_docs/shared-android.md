@@ -49,3 +49,15 @@ libsodium-wrappers 0.7.15 via `scripts/generate-chunked-stream-vectors.mjs`, key
 envelopes, auth flows against `FakeServer`) and `scripts/crosscheck-web-crypto.sh` (both ways
 against the web's own `e2e-crypto`, incl. saved places). Drive's and Calendar's suites and live
 tests ran green on top of it on 2026-10-16.
+
+## Offline (2026-10-19, `feature/offline-support`)
+
+- `NeutrinoApi.send` retries transient failures under `retryPolicy` (`core/api/RetryPolicy.kt`):
+  never-connected errors and 429/503 for any method; timeouts, resets and 408/502/504 for
+  GET/HEAD only, because a repeated save would come back as a false content-version conflict.
+  `Retry-After` is honoured, capped at 8 s. The same rules as iOS `RetryPolicy`. OkHttp's own
+  `retryOnConnectionFailure` is still on underneath; `RetryTest` turns it off to see this layer.
+- `core/sync/ConnectivityBannerState` decides the banner's copy (same words as iOS);
+  `android/ui/ConnectivityBanner` draws it; `android/net/NetworkMonitor` replaces each app's
+  connectivity callback and, unlike them, reads the initial state — the default-network callback
+  says nothing when an app starts offline.
