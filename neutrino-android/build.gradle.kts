@@ -15,6 +15,7 @@ android {
     defaultConfig {
         minSdk = 26
         consumerProguardFiles("consumer-rules.pro")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -49,4 +50,10 @@ dependencies {
     api(libs.zxing.embedded)
 
     testImplementation(libs.junit)
+
+    // Printing draws through StaticLayout and PdfDocument, which only the real framework renders:
+    // its tests run on a device or emulator (`./gradlew :neutrino-android:connectedDebugAndroidTest`).
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

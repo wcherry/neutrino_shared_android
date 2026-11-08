@@ -51,6 +51,28 @@ multi-client change. `scripts/crosscheck-web-docx.sh` runs the web's own reader 
 against this one in both directions (it drops a probe test into the web's `__tests__/ooxml/` for
 the run and removes it after); keep it passing.
 
+## Printing — added 2026-10-18
+
+The Android counterpart of `NeutrinoPrint` in neutrino_shared_ios, split the usual way:
+
+- `neutrino-core` `core/print/PrintLayout.kt` — page geometry (header and footer bands, margins,
+  the content area; the same 504 × 664pt on Letter as iOS), `Page n of m`, and `PageBreaks`, which
+  cuts laid-out lines into pages without splitting one. JVM-tested.
+- `neutrino-android` `android/print/` — `NeutrinoPrintJob` + `PrintPageSource` (what an app
+  supplies), `TextPageSource` (a `StaticLayout` cut by `PageBreaks`; an editor's own spans draw on
+  paper), `PrintPageRenderer` (bands + content, and `writePdf` for tests and export),
+  `NeutrinoPrintAdapter`/`NeutrinoPrinter` (the system print dialog; "Save as PDF" means every
+  device can print), and the Compose `rememberPrintController`, `PrintMenuItem`, `PrintStatus`.
+
+Unlike iOS, nothing can force paper to the light appearance after the fact: a colour is resolved
+when its span is made. An app builds its print content from a light palette (Docs:
+`DocumentPrint.paperPalette`). The adapter's callbacks are on the main thread, so a page may read
+UI-owned state such as an image cache.
+
+Tests that draw need the real framework: `./gradlew :neutrino-android:connectedDebugAndroidTest`
+on a device or emulator (9 tests, `PrintRenderingTest`, which renders the PDF back with
+`PdfRenderer` and checks where the ink is).
+
 ## Threading
 
 `NeutrinoApi.text`/`openBlob` and the `AuthClient` calls read response bodies on
