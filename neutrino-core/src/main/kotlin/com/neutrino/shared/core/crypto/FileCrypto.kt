@@ -6,7 +6,9 @@ import kotlinx.serialization.json.Json
 /**
  * The Drive E2EE scheme, shared byte for byte with every other client:
  *
- * - **File content**: one [SecretStream] push under a random 32-byte DEK, `[header][ciphertext]`.
+ * - **File content**: written as one [SecretStream] push under a random 32-byte DEK,
+ *   `[header][ciphertext]` (v0). Read in any shape the platform writes — v0, **NEB1** and
+ *   **Photos-chunked** (`neutrino/agent_docs/chunked-file-encryption.md`, #318).
  * - **DEK transport**: `crypto_box_seal` to a keyring entry's public key, base64url.
  * - **Metadata**: `{"name","mimeType"}` JSON through the same file encryption, base64url — the
  *   `encrypted_metadata` upload field.
@@ -27,10 +29,33 @@ object FileCrypto {
 
     fun encryptFile(plaintext: ByteArray, dek: ByteArray): ByteArray = SecretStream.encrypt(plaintext, dek)
 
-    /** `chunkSize` comes from the file's metadata; `null` (or 0) for the usual single push. */
-    fun decryptFile(data: ByteArray, dek: ByteArray, chunkSize: Int? = null): ByteArray =
-        (if (chunkSize != null && chunkSize > 0) SecretStream.decryptChunked(data, dek, chunkSize) else SecretStream.decrypt(data, dek))
-            ?: throw CryptoException("File content could not be decrypted — the data may be corrupt.")
+    /**
+     * Opens a file body in any shape the platform writes, chosen by the bytes (spec §3.5–§3.6):
+     *
+     * - **NEB1** when it starts `NEB1`. A malformed header falls through to the other shapes (a
+     *   random v0 header starts `NEB1` once in 2³²); a failed authentication does not.
+     * - **Photos-chunked** when the metadata gives `chunkSize`.
+     * - **v0** otherwise; and when that fails on a body longer than one 1 MiB chunk, Photos' 1 MiB
+     *   chunks — safe, since both readings are fully authenticated.
+     */
+    fun decryptFile(data: ByteArray, dek: ByteArray, chunkSize: Int? = null): ByteArray {
+        val failed = CryptoException("File content could not be decrypted — the data may be corrupt.")
+        if (SecretStream.hasNeb1Magic(data)) {
+            when (val result = SecretStream.decryptNeb1(data, dek)) {
+                is SecretStream.Neb1Result.Opened -> return result.plaintext
+                SecretStream.Neb1Result.BadAuthentication -> throw failed
+                SecretStream.Neb1Result.BadHeader -> Unit // structural: try the other shapes
+            }
+        }
+        if (chunkSize != null && chunkSize > 0) {
+            return SecretStream.decryptChunked(data, dek, chunkSize) ?: throw failed
+        }
+        SecretStream.decrypt(data, dek)?.let { return it }
+        if (data.size > SecretStream.HEADER_BYTES + SecretStream.PHOTOS_CHUNK_SIZE + SecretStream.ABYTES) {
+            SecretStream.decryptChunked(data, dek, SecretStream.PHOTOS_CHUNK_SIZE)?.let { return it }
+        }
+        throw failed
+    }
 
     fun encryptMetadata(name: String, mimeType: String, dek: ByteArray): String =
         B64.encode(encryptFile(json.encodeToString(Metadata.serializer(), Metadata(name, mimeType)).toByteArray(), dek))
