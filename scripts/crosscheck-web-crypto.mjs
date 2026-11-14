@@ -40,6 +40,8 @@ await check('Android secretstream file decrypts on the web', () =>
   new TextDecoder().decode(crypto.decryptFile(u(a.encryptedFile), u(a.dek))) === a.plaintext);
 await check('Android streamed 200 KB file decrypts on the web', () =>
   createHash('sha256').update(crypto.decryptFile(u(a.encryptedLargeFile), u(a.dek))).digest('hex') === a.largeFileSha256);
+await check('Android NEB1 file decrypts on the web', () =>
+  createHash('sha256').update(crypto.decryptFile(u(a.encryptedNeb1File), u(a.dek))).digest('hex') === a.largeFileSha256);
 await check('Android metadata decrypts on the web', () => {
   const m = crypto.decryptMetadata(a.encryptedMetadata, u(a.dek));
   return m.name === 'Plan — v2.docx' && String(m.mimeType).startsWith('application/vnd.openxml');
@@ -74,6 +76,7 @@ const qr = await mobileKeyQr.exportKeyQr(ring);
 const web = {
   sealedDek: crypto.encryptFileKey(u(a.dek), u(a.publicKey)),
   encryptedFile: b(crypto.encryptFile(new TextEncoder().encode(a.plaintext), u(a.dek))),
+  encryptedNeb1File: b(crypto.encryptFileNeb1(new TextEncoder().encode(a.plaintext.repeat(200)), u(a.dek), 4096)),
   encryptedMetadata: crypto.encryptMetadata({ name: 'Plan — v2.docx', mimeType: 'application/pdf' }, u(a.dek)),
   keyringJson: JSON.stringify(keyring.serializeKeyring(ring)),
   recoveryKit: recoveryKit.exportRecoveryKit(ring),

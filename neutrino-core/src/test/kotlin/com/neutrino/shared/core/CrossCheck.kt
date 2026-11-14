@@ -69,6 +69,8 @@ object CrossCheck {
             put("encryptedFile", B64.encode(FileCrypto.encryptFile(PLAINTEXT.toByteArray(), dek)))
             put("largeFileSha256", FileCrypto.sha256Hex(large))
             put("encryptedLargeFile", B64.encode(largeOut.toByteArray()))
+            // NEB1 (neutrino#318), ~49 chunks of 4 KiB: the web must open this writer's AD and framing.
+            put("encryptedNeb1File", B64.encode(SecretStream.encryptNeb1(large, dek, 4096)))
             put("encryptedMetadata", FileCrypto.encryptMetadata("Plan — v2.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", dek))
             put("keyringJson", KeyringCodec.encodeJson(ring))
             put("recoveryKit", RecoveryKit.export(ring))
@@ -97,6 +99,11 @@ object CrossCheck {
         }
         check("web secretstream file decrypts here") {
             FileCrypto.decryptFile(B64.decode(s(w, "encryptedFile"))!!, B64.decode(s(a, "dek"))!!).decodeToString() == PLAINTEXT
+        }
+        check("web NEB1 file decrypts here") {
+            val blob = B64.decode(s(w, "encryptedNeb1File"))!!
+            SecretStream.hasNeb1Magic(blob) &&
+                FileCrypto.decryptFile(blob, B64.decode(s(a, "dek"))!!).decodeToString() == PLAINTEXT.repeat(200)
         }
         check("web metadata decrypts here") {
             FileCrypto.decryptMetadata(s(w, "encryptedMetadata"), B64.decode(s(a, "dek"))!!).name == "Plan — v2.docx"
