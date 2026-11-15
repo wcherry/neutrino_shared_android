@@ -12,6 +12,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.security.MessageDigest
 import java.util.Base64
 
@@ -105,6 +108,90 @@ class ChunkedFileVectorsTest {
         for (size in listOf(1, 4096, 2 * 1024 * 1024 + 3)) {
             val plain = plaintext(size)
             assertArrayEquals(plain, FileCrypto.decryptFile(FileCrypto.encryptFile(plain, key), key))
+        }
+    }
+
+    // ── The stream reader and writer ──────────────────────────────────────────────────────────
+
+    /** Hands out at most 7 bytes per read, so no reader can assume a read fills its buffer. */
+    private class Trickle(data: ByteArray) : InputStream() {
+        private val inner = ByteArrayInputStream(data)
+        override fun read(): Int = inner.read()
+        override fun read(b: ByteArray, off: Int, len: Int): Int = inner.read(b, off, minOf(len, 7))
+    }
+
+    private fun streamOpen(data: ByteArray, key: ByteArray, chunkSize: Int?, length: Long?): ByteArray? {
+        val out = ByteArrayOutputStream()
+        return if (FileCrypto.decryptFile(Trickle(data), out, key, chunkSize, length)) out.toByteArray() else null
+    }
+
+    @Test
+    fun theStreamReaderOpensEveryCase() {
+        for (case in vectors["cases"]!!.jsonArray) {
+            val c = case.jsonObject
+            val name = c["name"]!!.jsonPrimitive.content
+            val data = std(c["ciphertext"]!!.jsonPrimitive.content)
+            val chunkSize = c["chunkSize"]?.jsonPrimitive?.intOrNull
+            // With and without the length, and without the metadata where the in-memory reader can
+            // also do without it: Photos' own 1 MiB bodies open from their first tag alone.
+            val sizes = if (chunkSize == null || chunkSize == SecretStream.PHOTOS_CHUNK_SIZE) listOf(chunkSize, null) else listOf(chunkSize)
+            for (size in sizes) for (length in listOf(data.size.toLong(), null)) {
+                val plain = streamOpen(data, dek, size, length)
+                assertEquals("$name ($size, $length)", c["sha256"]!!.jsonPrimitive.content, plain?.let(::sha256))
+            }
+        }
+    }
+
+    @Test
+    fun theStreamReaderRejectsEveryRejection() {
+        for (entry in vectors["rejected"]!!.jsonArray) {
+            val r = entry.jsonObject
+            val name = r["name"]!!.jsonPrimitive.content
+            val key = r["dek"]?.jsonPrimitive?.content?.let(::std) ?: dek
+            val data = std(r["ciphertext"]!!.jsonPrimitive.content)
+            val chunkSize = r["chunkSize"]?.jsonPrimitive?.intOrNull
+            for (size in listOf(chunkSize, null)) for (length in listOf(data.size.toLong(), null)) {
+                assertEquals("$name ($size, $length) should not decrypt", null, streamOpen(data, key, size, length))
+            }
+        }
+    }
+
+    @Test
+    fun theStreamWriterMatchesTheReadersAtTheBoundarySizes() {
+        for (chunk in listOf(SecretStream.NEB1_MIN_CHUNK_SIZE, 65_536)) {
+            for (size in listOf(0, 1, chunk - 1, chunk, chunk + 1, 2 * chunk, 2 * chunk + 1)) {
+                val key = FileCrypto.generateDek()
+                val plain = plaintext(size)
+                val out = ByteArrayOutputStream()
+                val written = SecretStream.encryptNeb1(Trickle(plain), out, key, size.toLong(), chunk)
+                val blob = out.toByteArray()
+                assertEquals(blob.size.toLong(), written)
+                assertArrayEquals("$size at $chunk, in memory", plain, FileCrypto.decryptFile(blob, key))
+                assertArrayEquals("$size at $chunk, streamed", plain, streamOpen(blob, key, null, blob.size.toLong()))
+            }
+        }
+    }
+
+    @Test
+    fun theStreamWriterRefusesAnInputOfTheWrongLength() {
+        val key = FileCrypto.generateDek()
+        for (actual in listOf(99, 101)) {
+            try {
+                SecretStream.encryptNeb1(ByteArrayInputStream(plaintext(actual)), ByteArrayOutputStream(), key, 100, 4096)
+                fail("an input of $actual bytes for a header saying 100 should throw")
+            } catch (_: java.io.IOException) {
+            }
+        }
+    }
+
+    @Test
+    fun theStreamReaderStillOpensV0() {
+        val key = FileCrypto.generateDek()
+        for (size in listOf(0, 1, 4096, 2 * 1024 * 1024 + 3)) {
+            val plain = plaintext(size)
+            val blob = FileCrypto.encryptFile(plain, key)
+            assertArrayEquals(plain, streamOpen(blob, key, null, blob.size.toLong()))
+            assertArrayEquals(plain, streamOpen(blob, key, null, null))
         }
     }
 }

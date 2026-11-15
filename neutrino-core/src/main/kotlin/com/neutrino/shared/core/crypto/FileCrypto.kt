@@ -57,6 +57,20 @@ object FileCrypto {
         throw failed
     }
 
+    /**
+     * The stream form of [decryptFile] for bodies too large to hold: one chunk in memory at a time.
+     * Returns true only when the body authenticated — on false, discard everything written to
+     * `output`. `totalLength` is the body's length when known (`Content-Length`); see
+     * [SecretStream.decryptAnyShape]. Does not close either stream.
+     */
+    fun decryptFile(
+        input: java.io.InputStream,
+        output: java.io.OutputStream,
+        dek: ByteArray,
+        chunkSize: Int? = null,
+        totalLength: Long? = null,
+    ): Boolean = SecretStream.decryptAnyShape(input, output, dek, chunkSize, totalLength)
+
     fun encryptMetadata(name: String, mimeType: String, dek: ByteArray): String =
         B64.encode(encryptFile(json.encodeToString(Metadata.serializer(), Metadata(name, mimeType)).toByteArray(), dek))
 
