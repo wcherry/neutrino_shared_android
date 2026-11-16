@@ -8,6 +8,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.PushbackInputStream
 import java.security.MessageDigest
 
 /**
@@ -241,21 +242,34 @@ object SecretStream {
         return out.toByteArray()
     }
 
+    /** A NEB1 header's two numbers, once its fixed fields have checked out. */
+    private class Neb1Header(val chunkSize: Int, val plaintextLength: Long) {
+        val chunkCount: Long get() = maxOf(1L, (plaintextLength + chunkSize - 1) / chunkSize)
+        val blobLength: Long get() = NEB1_HEADER_BYTES + plaintextLength + ABYTES.toLong() * chunkCount
+    }
+
+    /** Spec §4.2 steps 1–7 over the first 44 bytes, or `null` when they are not a NEB1 header. */
+    private fun parseNeb1Header(head: ByteArray): Neb1Header? {
+        if (head.size < NEB1_HEADER_BYTES || !hasNeb1Magic(head)) return null
+        if (head[4].toInt() != 1 || head[5].toInt() != 1 || head[6].toInt() != 0 || head[7].toInt() != 0) return null
+        var chunk = 0L
+        for (i in 0 until 4) chunk = (chunk shl 8) or (head[8 + i].toLong() and 0xff)
+        var length = 0L
+        for (i in 0 until 8) length = (length shl 8) or (head[12 + i].toLong() and 0xff)
+        if (chunk !in NEB1_MIN_CHUNK_SIZE.toLong()..NEB1_MAX_CHUNK_SIZE.toLong()) return null
+        // Negative is a length over 2⁶³, which no blob can have.
+        if (length < 0 || length > Long.MAX_VALUE / 2) return null
+        return Neb1Header(chunk.toInt(), length)
+    }
+
     /** Decrypts a NEB1 blob (spec §4.2), checking the whole header and length before any chunk. */
     fun decryptNeb1(data: ByteArray, key: ByteArray): Neb1Result {
-        if (key.size != KEY_BYTES || data.size < NEB1_HEADER_BYTES || !hasNeb1Magic(data)) return Neb1Result.BadHeader
-        if (data[4].toInt() != 1 || data[5].toInt() != 1 || data[6].toInt() != 0 || data[7].toInt() != 0) {
-            return Neb1Result.BadHeader
-        }
-        var chunk = 0L
-        for (i in 0 until 4) chunk = (chunk shl 8) or (data[8 + i].toLong() and 0xff)
-        var length = 0L
-        for (i in 0 until 8) length = (length shl 8) or (data[12 + i].toLong() and 0xff)
-        if (chunk !in NEB1_MIN_CHUNK_SIZE.toLong()..NEB1_MAX_CHUNK_SIZE.toLong()) return Neb1Result.BadHeader
-        // Negative is a length over 2⁶³; anything that can't be held in one array can't be read here.
-        if (length < 0 || length > Int.MAX_VALUE - NEB1_HEADER_BYTES) return Neb1Result.BadHeader
-        val chunkSize = chunk.toInt()
-        val plainLength = length.toInt()
+        if (key.size != KEY_BYTES) return Neb1Result.BadHeader
+        val header = parseNeb1Header(data) ?: return Neb1Result.BadHeader
+        // Anything that can't be held in one array can't be read here; the stream reader can.
+        if (header.plaintextLength > Int.MAX_VALUE - NEB1_HEADER_BYTES) return Neb1Result.BadHeader
+        val chunkSize = header.chunkSize
+        val plainLength = header.plaintextLength.toInt()
         val count = maxOf(1, (plainLength + chunkSize - 1) / chunkSize)
         if (data.size.toLong() != NEB1_HEADER_BYTES.toLong() + plainLength + ABYTES.toLong() * count) {
             return Neb1Result.BadHeader
@@ -281,6 +295,149 @@ object SecretStream {
             subkey.fill(0)
         }
         return Neb1Result.Opened(out.toByteArray())
+    }
+
+    // ── Streaming, any shape ───────────────────────────────────────────────────────────────────
+
+    /**
+     * Streams a file body in any shape the platform writes from `input` into `output`, holding one
+     * chunk at a time — the stream form of [FileCrypto.decryptFile], for downloads too large to
+     * hold. Returns true only when the whole body authenticated; on false everything written to
+     * `output` is unauthenticated and must be discarded. Does not close either stream.
+     *
+     * - **NEB1** when the first 44 bytes are a well-formed NEB1 header and, where `totalLength` is
+     *   known (a response's `Content-Length`), it is the length the header implies (spec §4.2 step
+     *   8). Anything else falls through to the other shapes, as the in-memory reader does. Without
+     *   `totalLength` a wrong length is caught chunk by chunk instead, and fails rather than falls
+     *   through — which only a v0 header that is a valid NEB1 header by chance (≈2⁻⁶⁴) could notice.
+     * - **Photos-chunked** when `chunkSize` is given (from the file's metadata), or when the first
+     *   message's tag is `MESSAGE`: every v0 writer tags its one message `FINAL`, so a stream that
+     *   goes on past its first message is chunked, at the only size Photos writes.
+     * - **v0** otherwise.
+     */
+    fun decryptAnyShape(
+        input: InputStream,
+        output: OutputStream,
+        key: ByteArray,
+        chunkSize: Int? = null,
+        totalLength: Long? = null,
+    ): Boolean {
+        if (key.size != KEY_BYTES) return false
+        val source = PushbackInputStream(input, NEB1_HEADER_BYTES)
+        val head = source.readUpTo(NEB1_HEADER_BYTES)
+        val neb1 = parseNeb1Header(head)?.takeIf { totalLength == null || totalLength < 0 || it.blobLength == totalLength }
+        if (neb1 != null) return decryptNeb1Stream(source, output, key, head, neb1)
+        source.unread(head)
+        if (chunkSize != null && chunkSize > 0) return decryptChunked(source, output, key, chunkSize)
+        if (head.size > HEADER_BYTES && firstTag(key, head) == TAG_MESSAGE) {
+            return decryptChunked(source, output, key, PHOTOS_CHUNK_SIZE)
+        }
+        return decrypt(source, output, key)
+    }
+
+    /** The tag of the first message, decrypted without authenticating it: a hint, never a verdict. */
+    private fun firstTag(key: ByteArray, head: ByteArray): Byte {
+        val state = State(key, head.copyOfRange(0, HEADER_BYTES))
+        val block = ByteArray(64)
+        block[0] = head[HEADER_BYTES]
+        state.engine.processBytes(block, 0, 64, block, 0)
+        return block[0]
+    }
+
+    /** NEB1 chunk by chunk, after its header: the length check of step 8 becomes "exactly n chunks, then EOF". */
+    private fun decryptNeb1Stream(
+        input: InputStream,
+        output: OutputStream,
+        key: ByteArray,
+        head: ByteArray,
+        header: Neb1Header,
+    ): Boolean {
+        val prefix = head.copyOfRange(0, NEB1_PREFIX_BYTES)
+        var subkey = Sodium.hchacha20(key, head.copyOfRange(NEB1_PREFIX_BYTES, NEB1_PREFIX_BYTES + 16))
+        val nonce = initialNonce(head, NEB1_PREFIX_BYTES + 16)
+        val buf = ByteArray(header.chunkSize + ABYTES)
+        try {
+            for (index in 0 until header.chunkCount) {
+                val want = minOf(header.chunkSize.toLong(), header.plaintextLength - index * header.chunkSize).toInt()
+                if (input.readUpTo(buf, want + ABYTES) != want + ABYTES) return false
+                val (plain, tag, mac) = pullOne(subkey, nonce, buf, 0, want + ABYTES, prefix) ?: return false
+                val expected = if (index == header.chunkCount - 1) TAG_FINAL else TAG_MESSAGE
+                if (plain.size != want || tag != expected) return false
+                output.write(plain)
+                plain.fill(0)
+                subkey = advance(subkey, nonce, mac, tag)
+            }
+            return input.read() < 0
+        } finally {
+            subkey.fill(0)
+            buf.fill(0)
+        }
+    }
+
+    /** The stream form of [decryptChunked]: `[header][chunkSize+17]…[≤ chunkSize+17, FINAL]`, then EOF. */
+    fun decryptChunked(input: InputStream, output: OutputStream, key: ByteArray, chunkSize: Int): Boolean {
+        if (key.size != KEY_BYTES || chunkSize !in 1..NEB1_MAX_CHUNK_SIZE) return false
+        val header = input.readExactly(HEADER_BYTES) ?: return false
+        var subkey = Sodium.hchacha20(key, header.copyOfRange(0, 16))
+        val nonce = initialNonce(header, 16)
+        val buf = ByteArray(chunkSize + ABYTES)
+        try {
+            while (true) {
+                val n = input.readUpTo(buf, buf.size)
+                if (n < ABYTES) return false
+                val (plain, tag, mac) = pullOne(subkey, nonce, buf, 0, n) ?: return false
+                output.write(plain)
+                val full = plain.size == chunkSize
+                plain.fill(0)
+                subkey = advance(subkey, nonce, mac, tag)
+                if (tag == TAG_FINAL) return input.read() < 0
+                // A short chunk that isn't FINAL is a re-framed stream, or one cut short.
+                if (!full || n < buf.size) return false
+            }
+        } finally {
+            subkey.fill(0)
+            buf.fill(0)
+        }
+    }
+
+    /**
+     * Streams `length` bytes of `input` into `output` as NEB1 (spec §4.1), one chunk at a time.
+     * `length` is written into the authenticated header, so the input must supply exactly that
+     * many bytes; anything else throws. Returns the ciphertext length. Does not close either stream.
+     */
+    fun encryptNeb1(
+        input: InputStream,
+        output: OutputStream,
+        key: ByteArray,
+        length: Long,
+        chunkSize: Int = NEB1_DEFAULT_CHUNK_SIZE,
+    ): Long {
+        require(key.size == KEY_BYTES) { "secretstream key must be 32 bytes" }
+        require(chunkSize in NEB1_MIN_CHUNK_SIZE..NEB1_MAX_CHUNK_SIZE) { "chunk size out of range" }
+        require(length >= 0) { "length must not be negative" }
+        val header = Neb1Header(chunkSize, length)
+        val prefix = neb1Prefix(chunkSize, length)
+        val ssHeader = Sodium.randomBytes(HEADER_BYTES)
+        var subkey = Sodium.hchacha20(key, ssHeader.copyOfRange(0, 16))
+        val nonce = initialNonce(ssHeader, 16)
+        output.write(prefix)
+        output.write(ssHeader)
+        val buf = ByteArray(chunkSize)
+        try {
+            for (index in 0 until header.chunkCount) {
+                val want = minOf(chunkSize.toLong(), length - index * chunkSize).toInt()
+                if (input.readUpTo(buf, want) != want) throw java.io.IOException("input ended before $length bytes")
+                val tag = if (index == header.chunkCount - 1) TAG_FINAL else TAG_MESSAGE
+                val (message, mac) = pushOne(subkey, nonce, buf.copyOf(want), tag, prefix)
+                output.write(message)
+                subkey = advance(subkey, nonce, mac, tag)
+            }
+            if (input.read() >= 0) throw java.io.IOException("input longer than $length bytes")
+        } finally {
+            subkey.fill(0)
+            buf.fill(0)
+        }
+        return header.blobLength
     }
 
     // ── One message at a time ──────────────────────────────────────────────────────────────────
@@ -435,6 +592,22 @@ object SecretStream {
 
     private fun putLe64(b: ByteArray, off: Int, v: Long) {
         for (i in 0 until 8) b[off + i] = (v ushr (8 * i)).toByte()
+    }
+
+    /** Reads until `n` bytes or EOF; the result is shorter than `n` only at EOF. */
+    private fun InputStream.readUpTo(n: Int): ByteArray {
+        val out = ByteArray(n)
+        return out.copyOf(readUpTo(out, n))
+    }
+
+    private fun InputStream.readUpTo(into: ByteArray, n: Int): Int {
+        var read = 0
+        while (read < n) {
+            val r = read(into, read, n - read)
+            if (r < 0) break
+            read += r
+        }
+        return read
     }
 
     private fun InputStream.readExactly(n: Int): ByteArray? {
