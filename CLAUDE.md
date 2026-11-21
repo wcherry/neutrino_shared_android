@@ -3,7 +3,8 @@
 Part of the Neutrino platform — read the root `../CLAUDE.md` coupling rules first. This is the
 Android counterpart of `neutrino_shared_ios`: account identity, OAuth, the keyring and the
 **fifth E2EE implementation**, shared by every Neutrino Android app (Drive, Calendar, Docs, Notes) —
-plus the `.docx` reader/writer Docs stores its documents in.
+plus the `.docx` reader/writer Docs stores its documents in and the `.xlsx` one Sheets stores
+its workbooks in.
 
 **Consumed by local path, unversioned.** Each app's `settings.gradle.kts` has
 `includeBuild("../neutrino_shared_android")`, so editing this repo changes every app the moment it
@@ -17,7 +18,8 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 (cd ../neutrino_calendar_android_mobile && ./gradlew :core:test :app:assembleDebug)
 (cd ../neutrino_docs_android_mobile && ./gradlew :core:test :app:assembleDebug)
 (cd ../neutrino_notes_android_mobile && ./gradlew :core:test :app:assembleDebug)
-./scripts/crosscheck-web-docx.sh                         # after touching core/ooxml
+./scripts/crosscheck-web-docx.sh                         # after touching core/ooxml (Docx*)
+./scripts/crosscheck-web-xlsx.sh                         # after touching core/ooxml (Xlsx*)
 ```
 
 - `:neutrino-core` is plain JVM (`com.neutrino.shared.core.{api,crypto,keys,ooxml}`) with
@@ -26,8 +28,10 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 - Crypto (`core/crypto/`) is a wire format shared with the web, iOS, macOS, Windows and the
   server: any change there is a coordinated multi-repo change, and the crosscheck must pass both
   ways.
-- `core/ooxml` is Docs' storage format, shared with the web and iOS: a change there is a
-  multi-client change, and `crosscheck-web-docx.sh` must pass both ways.
+- `core/ooxml` is Docs' and Sheets' storage format, shared with the web and iOS: a change there is
+  a multi-client change, and `crosscheck-web-docx.sh` / `crosscheck-web-xlsx.sh` must pass both
+  ways. `Xlsx*` is a line-for-line port of the web's `lib/ooxml/xlsx/{read,write,mapping}.ts` over
+  the editor's `{"sheets":[…]}` JSON model; port a web change there rather than diverging.
 - Each app is a `NeutrinoAppConfig` in `NeutrinoApps` (`core/api/Http.kt`): its prefix and OAuth
   client id must match a `neutrino/migrations/*_oauth__*` row. Never change or reuse a prefix.
 - Network bodies are read on `Dispatchers.IO` inside the client; keep it that way — apps call
