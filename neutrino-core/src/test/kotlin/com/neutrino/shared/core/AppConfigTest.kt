@@ -23,7 +23,10 @@ class AppConfigTest {
     @Test
     fun theShippedValuesMatchTheServerRowsAndTheIosPrefixes() {
         assertEquals(
-            listOf("nd" to "neutrino-android", "ncal" to "neutrino-calendar-android", "ndoc" to "neutrino-docs-android"),
+            listOf(
+                "nd" to "neutrino-android", "ncal" to "neutrino-calendar-android", "ndoc" to "neutrino-docs-android",
+                "nn" to "neutrino-notes-android", "nsheet" to "neutrino-sheets-android", "nphoto" to "neutrino-photos-android",
+            ),
             NeutrinoApps.all.map { it.prefix to it.oauthClientId },
         )
     }

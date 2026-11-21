@@ -94,7 +94,7 @@ object NeutrinoApps {
         oauthClientId = "neutrino-calendar-android",
     )
 
-    /** Seeded by `neutrino/migrations/00143_oauth__*`. The `ndoc` prefix matches the iOS Docs app's. */
+    /** Seeded by `neutrino/migrations/00148_oauth__*` (00143 on its branch). The `ndoc` prefix matches the iOS Docs app's. */
     val docs = NeutrinoAppConfig(
         slug = "docs",
         displayName = "Neutrino Docs",
@@ -103,7 +103,34 @@ object NeutrinoApps {
         oauthClientId = "neutrino-docs-android",
     )
 
-    val all: List<NeutrinoAppConfig> = listOf(drive, calendar, docs)
+    /** Seeded by `neutrino/migrations/00160_oauth__*`. The `nn` prefix matches the iOS Notes app's. */
+    val notes = NeutrinoAppConfig(
+        slug = "notes",
+        displayName = "Neutrino Notes",
+        contentNoun = "notes",
+        prefix = "nn",
+        oauthClientId = "neutrino-notes-android",
+    )
+
+    /** Seeded by `neutrino/migrations/00160_oauth__*`. The `nsheet` prefix matches the iOS Sheets app's. */
+    val sheets = NeutrinoAppConfig(
+        slug = "sheets",
+        displayName = "Neutrino Sheets",
+        contentNoun = "spreadsheets",
+        prefix = "nsheet",
+        oauthClientId = "neutrino-sheets-android",
+    )
+
+    /** Seeded by `neutrino/migrations/00160_oauth__*`. The `nphoto` prefix matches the iOS Photos app's. */
+    val photos = NeutrinoAppConfig(
+        slug = "photos",
+        displayName = "Neutrino Photos",
+        contentNoun = "photos",
+        prefix = "nphoto",
+        oauthClientId = "neutrino-photos-android",
+    )
+
+    val all: List<NeutrinoAppConfig> = listOf(drive, calendar, docs, notes, sheets, photos)
 }
 
 /** Every failure a request can end in, with text a person can act on. */

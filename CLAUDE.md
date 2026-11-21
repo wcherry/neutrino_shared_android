@@ -2,7 +2,7 @@
 
 Part of the Neutrino platform — read the root `../CLAUDE.md` coupling rules first. This is the
 Android counterpart of `neutrino_shared_ios`: account identity, OAuth, the keyring and the
-**fifth E2EE implementation**, shared by every Neutrino Android app (Drive, Calendar, Docs) —
+**fifth E2EE implementation**, shared by every Neutrino Android app (Drive, Calendar, Docs, Notes) —
 plus the `.docx` reader/writer Docs stores its documents in.
 
 **Consumed by local path, unversioned.** Each app's `settings.gradle.kts` has
@@ -16,6 +16,7 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 (cd ../neutrino_drive_android_mobile && ./gradlew :core:test :app:assembleDebug)
 (cd ../neutrino_calendar_android_mobile && ./gradlew :core:test :app:assembleDebug)
 (cd ../neutrino_docs_android_mobile && ./gradlew :core:test :app:assembleDebug)
+(cd ../neutrino_notes_android_mobile && ./gradlew :core:test :app:assembleDebug)
 ./scripts/crosscheck-web-docx.sh                         # after touching core/ooxml
 ```
 
