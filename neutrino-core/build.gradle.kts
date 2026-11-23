@@ -50,3 +50,11 @@ tasks.register<JavaExec>("docxCrossCheck") {
     mainClass.set("com.neutrino.shared.core.ooxml.DocxCrossCheck")
     args = (project.findProperty("args") as String? ?: "").split(" ").filter { it.isNotEmpty() }
 }
+
+// Driven by scripts/crosscheck-web-xlsx.sh: `-Pargs="emit out.json"` / `-Pargs="verify a.json w.json"`.
+tasks.register<JavaExec>("xlsxCrossCheck") {
+    dependsOn("testClasses")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.neutrino.shared.core.ooxml.XlsxCrossCheck")
+    args = (project.findProperty("args") as String? ?: "").split(" ").filter { it.isNotEmpty() }
+}
